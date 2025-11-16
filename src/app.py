@@ -2,7 +2,14 @@ from __future__ import annotations
 
 from datetime import date
 import calendar
+import sys
+from pathlib import Path
 from flask import Flask, jsonify, request
+
+# Add src directory to Python path for Heroku deployment
+BASE_DIR = Path(__file__).resolve().parent
+if str(BASE_DIR) not in sys.path:
+    sys.path.insert(0, str(BASE_DIR))
 
 # Support both "python src/app.py" and "FLASK_APP=src.app flask run"
 try:

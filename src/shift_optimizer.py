@@ -170,21 +170,29 @@ def optimize_shift(
         if is_wednesday(date):
             continue
         
-        for emp_id in employee_ids:
-            raw_value = ""
-            if emp_id in req:
-                raw_value = req[emp_id]
+        # Requestsシートのすべての列をチェック（従業員ID列を探す）
+        for key in req.keys():
+            key_str = str(key).strip()
+            # 従業員ID列かどうかを確認
+            if key_str in employee_ids:
+                emp_id = key_str
+                raw_value = req.get(key, "")
+                value = str(raw_value).strip().upper()
+                if value == "OFF":
+                    request_dict[(date, emp_id)] = True
+                    off_requests.append((emp_id, date))
+                    mandatory_off_dates_per_emp[emp_id].add(date)
             else:
-                for key in req.keys():
-                    key_str = str(key)
+                # 従業員IDで始まる列名の場合（例: "2005 名前"）
+                for emp_id in employee_ids:
                     if key_str.startswith(emp_id):
-                        raw_value = req[key]
+                        raw_value = req.get(key, "")
+                        value = str(raw_value).strip().upper()
+                        if value == "OFF":
+                            request_dict[(date, emp_id)] = True
+                            off_requests.append((emp_id, date))
+                            mandatory_off_dates_per_emp[emp_id].add(date)
                         break
-            value = str(raw_value).strip().upper()
-            if value == "OFF":
-                request_dict[(date, emp_id)] = True
-                off_requests.append((emp_id, date))
-                mandatory_off_dates_per_emp[emp_id].add(date)
     
     # 固定勤務者の情報を取得（FixedPattern を解析）
     fixed_patterns: Dict[str, Dict[str, Set[int]]] = {}
@@ -238,6 +246,13 @@ def optimize_shift(
     
     # 制約3: 希望休（OFF）を強制的に休みにする
     for emp_id, date in off_requests:
+        # 従業員IDが存在することを確認
+        if emp_id not in employee_ids:
+            print(f"警告: 従業員ID '{emp_id}' はEmployeesシートに存在しません。スキップします。")
+            continue
+        if (emp_id, date) not in shifts:
+            print(f"警告: 従業員ID '{emp_id}' と日付 '{date}' の組み合わせが無効です。スキップします。")
+            continue
         model.Add(shifts[(emp_id, date)] == 0)
         mandatory_off_dates_per_emp[emp_id].add(date)
     

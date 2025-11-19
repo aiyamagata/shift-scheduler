@@ -474,7 +474,10 @@ def generate_schedule(
         return True
 
     except Exception as e:
+        import traceback
         print(f"エラー: {e}")
+        print("詳細なエラー情報:")
+        traceback.print_exc()
         return False
 
 

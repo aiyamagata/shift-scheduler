@@ -42,7 +42,7 @@ def api_generate_schedule():
     Request JSON:
       {
         "spreadsheet_id": "...",     # required
-        "month": "YYYY-MM"           # optional (default: next month)
+        "month": "YYYY-MM"           # optional (default: Requestsシートから自動検出)
       }
     """
     try:
@@ -52,22 +52,26 @@ def api_generate_schedule():
             return jsonify({"error": "spreadsheet_id is required"}), 400
 
         ym = (data.get("month") or "").strip()
-        if not ym:
-            # default: next month
-            today = date.today()
-            year = today.year + (1 if today.month == 12 else 0)
-            mon = 1 if today.month == 12 else today.month + 1
-            ym = f"{year:04d}-{mon:02d}"
+        if ym:
+            # 月が指定されている場合はその月を使用
+            start_date, end_date = month_bounds(ym)
+        else:
+            # 月が指定されていない場合は、Requestsシートから自動検出
+            start_date = None
+            end_date = None
 
-        start_date, end_date = month_bounds(ym)
-        ok = generate_schedule(
+        ok, detected_month = generate_schedule(
             spreadsheet_id=spreadsheet_id,
             start_date=start_date,
             end_date=end_date,
         )
         if not ok:
-            return jsonify({"status": "failed", "month": ym}), 500
-        return jsonify({"status": "success", "month": ym}), 200
+            month_str = detected_month if detected_month else (ym if ym else "自動検出")
+            return jsonify({"status": "failed", "month": month_str}), 500
+        
+        # 成功時も検出された月を返す
+        month_str = detected_month if detected_month else (ym if ym else "自動検出")
+        return jsonify({"status": "success", "month": month_str}), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

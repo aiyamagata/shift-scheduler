@@ -10,7 +10,7 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
-from shift_optimizer import optimize_shift
+from shift_optimizer import optimize_shift, normalize_date
 
 # プロジェクトのベースディレクトリを取得
 BASE_DIR = pathlib.Path(__file__).resolve().parents[1]
@@ -415,10 +415,49 @@ def write_schedule_data(service, spreadsheet_id: str, sheet_name: str, data: lis
         traceback.print_exc()
         return None
 
+def detect_month_from_requests(requests: list) -> str | None:
+    """
+    Requestsシートから月（YYYY-MM）を自動検出
+    
+    Args:
+        requests: 希望休データのリスト
+    
+    Returns:
+        検出された月（YYYY-MM形式）、検出できない場合はNone
+    """
+    from collections import Counter
+    from datetime import datetime
+    
+    months = []
+    for req in requests:
+        date_raw = req.get("Date", "")
+        if not date_raw:
+            continue
+        
+        date_str = normalize_date(str(date_raw))
+        if not date_str:
+            continue
+        
+        try:
+            date_obj = datetime.strptime(date_str, "%Y-%m-%d")
+            month_str = date_obj.strftime("%Y-%m")
+            months.append(month_str)
+        except ValueError:
+            continue
+    
+    if not months:
+        return None
+    
+    # 最も多く出現する月を選択
+    month_counter = Counter(months)
+    most_common_month = month_counter.most_common(1)[0][0]
+    return most_common_month
+
+
 def generate_schedule(
     spreadsheet_id: str,
-    start_date: str,
-    end_date: str,
+    start_date: str | None = None,
+    end_date: str | None = None,
     employees_range: str = "A1:E10",
     requests_range: str = "A1:Z32",
 ) -> bool:
@@ -427,15 +466,18 @@ def generate_schedule(
     
     Args:
         spreadsheet_id: スプレッドシートID
-        start_date: 開始日（YYYY-MM-DD形式）
-        end_date: 終了日（YYYY-MM-DD形式）
+        start_date: 開始日（YYYY-MM-DD形式）。Noneの場合はRequestsシートから自動検出
+        end_date: 終了日（YYYY-MM-DD形式）。Noneの場合はRequestsシートから自動検出
         employees_range: Employeesシートの読み取り範囲
         requests_range: Requestsシートの読み取り範囲
     
     Returns:
-        成功したらTrue、失敗したらFalse
+        (成功したらTrue、失敗したらFalse, 検出された月（YYYY-MM形式、Noneの場合は指定された月）)
     """
     try:
+        from datetime import date
+        import calendar
+        
         # 認証とサービス取得
         creds = get_credentials()
         service = build("sheets", "v4", credentials=creds)
@@ -448,13 +490,29 @@ def generate_schedule(
         
         if not employees:
             print("エラー: 従業員データが見つかりませんでした")
-            return False
+            return False, None
 
         # Requests シートからデータを取得
         print("\n=== Requests シートを読み取り中 ===")
         requests_values = read_sheet_data(service, spreadsheet_id, "Requests", requests_range)
         requests = parse_requests_data(requests_values)
         print(f"希望データ数: {len(requests)}")
+        
+        # 開始日・終了日が指定されていない場合は、Requestsシートから自動検出
+        detected_month = None
+        if start_date is None or end_date is None:
+            detected_month = detect_month_from_requests(requests)
+            if detected_month:
+                print(f"\n=== Requestsシートから月を自動検出: {detected_month} ===")
+                year, mon = map(int, detected_month.split("-"))
+                first_day = date(year, mon, 1)
+                last_day = date(year, mon, calendar.monthrange(year, mon)[1])
+                start_date = first_day.strftime("%Y-%m-%d")
+                end_date = last_day.strftime("%Y-%m-%d")
+                print(f"対象期間: {start_date} ～ {end_date}")
+            else:
+                print("エラー: Requestsシートから月を検出できませんでした")
+                return False, None
 
         # シフト最適化を実行
         print("\n=== シフト最適化を実行中 ===")
@@ -462,7 +520,7 @@ def generate_schedule(
         
         if not schedule_result:
             print("エラー: シフトの生成に失敗しました")
-            return False
+            return False, detected_month
 
         print(f"生成されたシフト: {len(schedule_result)} 日分")
 
@@ -470,15 +528,21 @@ def generate_schedule(
         print("\n=== Schedule シートに書き込み中 ===")
         write_schedule_data(service, spreadsheet_id, "Schedule", schedule_result, employees)
         
+        # 検出された月を返す（指定されていた場合はstart_dateから計算）
+        if detected_month is None and start_date:
+            from datetime import datetime
+            date_obj = datetime.strptime(start_date, "%Y-%m-%d")
+            detected_month = date_obj.strftime("%Y-%m")
+        
         print("シフト生成完了！")
-        return True
+        return True, detected_month
 
     except Exception as e:
         import traceback
         print(f"エラー: {e}")
         print("詳細なエラー情報:")
         traceback.print_exc()
-        return False
+        return False, None
 
 
 def main():
@@ -508,14 +572,15 @@ def main():
     start_date, end_date = month_bounds(args.month)
     
     print("=== シフト生成テスト ===")
-    success = generate_schedule(
+    success, detected_month = generate_schedule(
         spreadsheet_id=args.spreadsheet_id,
         start_date=start_date,
         end_date=end_date,
     )
     
     if success:
-        print("\n✅ シフト生成が正常に完了しました！")
+        month_str = detected_month if detected_month else args.month
+        print(f"\n✅ シフト生成が正常に完了しました！（対象月: {month_str}）")
     else:
         print("\n❌ シフト生成に失敗しました")
 

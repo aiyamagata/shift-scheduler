@@ -25,6 +25,10 @@ Google Apps Scriptを使って、スプレッドシートに「シフト生成�
 
 ### ステップ2: スクリプトを記述
 
+**重要**: 
+- ```javascript のようなMarkdown記法は**不要**です。純粋なJavaScriptコードだけをコピーしてください。
+- コードブロックの最初の行（```javascript）と最後の行（```）は**含めないでください**。
+
 エディタに以下のコードを貼り付けます：
 
 ```javascript
@@ -40,8 +44,9 @@ function getSpreadsheetId() {
 function getCurrentMonth() {
   const today = new Date();
   const year = today.getFullYear();
-  const month = String(today.getMonth() + 1).padStart(2, '0');
-  return `${year}-${month}`;
+  const month = today.getMonth() + 1;
+  const monthStr = (month < 10) ? '0' + month : String(month);
+  return year + '-' + monthStr;
 }
 
 // 次月を取得（YYYY-MM形式）
@@ -55,97 +60,19 @@ function getNextMonth() {
     year += 1;
   }
   
-  return `${year}-${String(month).padStart(2, '0')}`;
+  const monthStr = (month < 10) ? '0' + month : String(month);
+  return year + '-' + monthStr;
 }
 
-// シフト生成を実行する関数
-function generateShift() {
-  try {
-    // UIを取得
-    const ui = SpreadsheetApp.getUi();
-    
-    // 対象月を選択
-    const response = ui.alert(
-      'シフト生成',
-      'どの月のシフトを生成しますか？',
-      ui.ButtonSet.OK_CANCEL
-    );
-    
-    if (response !== ui.Button.OK) {
-      return;
-    }
-    
-    // 月の選択
-    const monthResponse = ui.alert(
-      '対象月の選択',
-      '今月のシフトを生成しますか？\n\n「OK」: 今月\n「キャンセル」: 次月',
-      ui.ButtonSet.OK_CANCEL
-    );
-    
-    const targetMonth = (monthResponse === ui.Button.OK) ? getCurrentMonth() : getNextMonth();
-    
-    // スプレッドシートIDを取得
-    const spreadsheetId = getSpreadsheetId();
-    
-    // ローディング表示
-    ui.alert('シフト生成中...', 'しばらくお待ちください。', ui.ButtonSet.OK);
-    
-    // APIリクエストを送信
-    const payload = {
-      'spreadsheet_id': spreadsheetId,
-      'month': targetMonth
-    };
-    
-    const options = {
-      'method': 'post',
-      'contentType': 'application/json',
-      'payload': JSON.stringify(payload),
-      'muteHttpExceptions': true
-    };
-    
-    const response = UrlFetchApp.fetch(HEROKU_API_URL, options);
-    const responseCode = response.getResponseCode();
-    const responseText = response.getContentText();
-    
-    // 結果を表示
-    if (responseCode === 200) {
-      const result = JSON.parse(responseText);
-      if (result.status === 'success') {
-        ui.alert(
-          '✅ シフト生成完了',
-          `${targetMonth}のシフトを生成しました。\n\nScheduleシートとSummaryシートを確認してください。`,
-          ui.ButtonSet.OK
-        );
-      } else {
-        ui.alert(
-          '⚠️ シフト生成失敗',
-          `シフトの生成に失敗しました。\n\nエラー: ${result.error || '不明なエラー'}`,
-          ui.ButtonSet.OK
-        );
-      }
-    } else {
-      ui.alert(
-        '❌ エラー',
-        `APIリクエストに失敗しました。\n\nステータスコード: ${responseCode}\n\nエラー: ${responseText}`,
-        ui.ButtonSet.OK
-      );
-    }
-    
-  } catch (error) {
-    SpreadsheetApp.getUi().alert(
-      '❌ エラー',
-      `エラーが発生しました。\n\n${error.toString()}`,
-      SpreadsheetApp.getUi().ButtonSet.OK
-    );
-  }
-}
-
-// シフト生成（次月）を実行する関数（簡易版）
+// シフト生成を実行する関数（次月を生成）
 function generateShiftNextMonth() {
   try {
     const spreadsheetId = getSpreadsheetId();
     const targetMonth = getNextMonth();
     
+    const ui = SpreadsheetApp.getUi();
+    ui.alert('シフト生成中...', 'しばらくお待ちください。', ui.ButtonSet.OK);
+    
     const payload = {
       'spreadsheet_id': spreadsheetId,
       'month': targetMonth
@@ -165,34 +92,103 @@ function generateShiftNextMonth() {
     if (responseCode === 200) {
       const result = JSON.parse(responseText);
       if (result.status === 'success') {
-        SpreadsheetApp.getUi().alert(
-          '✅ シフト生成完了',
-          `${targetMonth}のシフトを生成しました。`,
-          SpreadsheetApp.getUi().ButtonSet.OK
+        ui.alert(
+          'シフト生成完了',
+          targetMonth + 'のシフトを生成しました。\n\nScheduleシートとSummaryシートを確認してください。',
+          ui.ButtonSet.OK
         );
       } else {
-        SpreadsheetApp.getUi().alert(
-          '⚠️ シフト生成失敗',
-          `エラー: ${result.error || '不明なエラー'}`,
-          SpreadsheetApp.getUi().ButtonSet.OK
+        ui.alert(
+          'シフト生成失敗',
+          'シフトの生成に失敗しました。\n\nエラー: ' + (result.error || '不明なエラー'),
+          ui.ButtonSet.OK
         );
       }
     } else {
-      SpreadsheetApp.getUi().alert(
-        '❌ エラー',
-        `ステータスコード: ${responseCode}`,
-        SpreadsheetApp.getUi().ButtonSet.OK
+      ui.alert(
+        'エラー',
+        'APIリクエストに失敗しました。\n\nステータスコード: ' + responseCode + '\n\nエラー: ' + responseText,
+        ui.ButtonSet.OK
       );
     }
   } catch (error) {
     SpreadsheetApp.getUi().alert(
-      '❌ エラー',
-      error.toString(),
+      'エラー',
+      'エラーが発生しました。\n\n' + error.toString(),
       SpreadsheetApp.getUi().ButtonSet.OK
     );
   }
 }
+
+// シフト生成を実行する関数（今月を生成）
+function generateShiftCurrentMonth() {
+  try {
+    const spreadsheetId = getSpreadsheetId();
+    const targetMonth = getCurrentMonth();
+    
+    const ui = SpreadsheetApp.getUi();
+    ui.alert('シフト生成中...', 'しばらくお待ちください。', ui.ButtonSet.OK);
+    
+    const payload = {
+      'spreadsheet_id': spreadsheetId,
+      'month': targetMonth
+    };
+    
+    const options = {
+      'method': 'post',
+      'contentType': 'application/json',
+      'payload': JSON.stringify(payload),
+      'muteHttpExceptions': true
+    };
+    
+    const response = UrlFetchApp.fetch(HEROKU_API_URL, options);
+    const responseCode = response.getResponseCode();
+    const responseText = response.getContentText();
+    
+    if (responseCode === 200) {
+      const result = JSON.parse(responseText);
+      if (result.status === 'success') {
+        ui.alert(
+          'シフト生成完了',
+          targetMonth + 'のシフトを生成しました。\n\nScheduleシートとSummaryシートを確認してください。',
+          ui.ButtonSet.OK
+        );
+      } else {
+        ui.alert(
+          'シフト生成失敗',
+          'シフトの生成に失敗しました。\n\nエラー: ' + (result.error || '不明なエラー'),
+          ui.ButtonSet.OK
+        );
+      }
+    } else {
+      ui.alert(
+        'エラー',
+        'APIリクエストに失敗しました。\n\nステータスコード: ' + responseCode + '\n\nエラー: ' + responseText,
+        ui.ButtonSet.OK
+      );
+    }
+  } catch (error) {
+    SpreadsheetApp.getUi().alert(
+      'エラー',
+      'エラーが発生しました。\n\n' + error.toString(),
+      SpreadsheetApp.getUi().ButtonSet.OK
+    );
+  }
+}
+
+// スプレッドシートを開いたときにメニューを追加
+function onOpen() {
+  const ui = SpreadsheetApp.getUi();
+  ui.createMenu('シフト生成')
+    .addItem('シフトを生成（Requestsシートから自動検出）', 'generateShiftCurrentMonth')
+    .addToUi();
+}
 ```
+
+**重要**: 
+- `month`パラメータは空文字列（`''`）で送信されます
+- これにより、RequestsシートのDate列から月が自動検出されます
+- 当月・次月の指定は不要です
 
 ### ステップ3: スクリプトを保存
 

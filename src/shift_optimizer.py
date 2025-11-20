@@ -333,13 +333,18 @@ def optimize_shift(
     weekly_rest_penalty_vars = []
     
     # 制約7: 週休2日（水曜の店舗休みを含めた、週休2日）を厳密に確保
-    # 水曜が店休日なので、水曜以外で最低1日は休みにする（週休2日を確保）
+    # 固定シフトの人以外は、週休2日を厳密に（ちょうど2日休む）
+    # 希望休がある場合は、それを優先的に週休2日に組み込む
     for emp_id in employee_ids:
+        # 固定シフトの人は除外（固定シフトの制約で既に管理されている）
+        if emp_id in fixed_employees:
+            continue
+        
         mandatory_off = mandatory_off_dates_per_emp.get(emp_id, set())
         mandatory_work = mandatory_work_dates_per_emp.get(emp_id, set())
         
         # 週ごとに週休2日を確保
-        # 各週（月曜日から日曜日まで）で、水曜を含めて最低2日は休みにする
+        # 各週（月曜日から日曜日まで）で、水曜を含めてちょうど2日は休みにする
         weeks = {}
         for date in dates:
             date_obj = datetime.strptime(date, "%Y-%m-%d")
@@ -358,28 +363,14 @@ def optimize_shift(
             week_workable_dates = [date for date in week_dates if not is_store_closed(date)]
             
             if len(week_workable_dates) > 0:
-                # その週で、店休日以外で最低1日は休みにする（週休2日を確保）
-                # 水曜が店休日なので、水曜以外で最低1日休みがあれば週休2日になる
-                # 必須勤務日や希望休を除いた、柔軟に調整できる日のみを対象
-                flexible_week_dates = [
-                    date for date in week_workable_dates
-                    if date not in mandatory_off and date not in mandatory_work
+                # その週の店休日以外で休みの日数を計算
+                # 水曜が店休日なので、水曜以外でちょうど1日は休みにする（週休2日を確保）
+                week_rest_vars = [
+                    1 - shifts[(emp_id, date)] for date in week_workable_dates
                 ]
-                
-                if len(flexible_week_dates) > 0:
-                    # 柔軟に調整できる日の中で、最低1日は休みにする
-                    # ただし、必須勤務日が多すぎて週休2日が確保できない場合は、ペナルティのみ
-                    week_rest_vars = [
-                        1 - shifts[(emp_id, date)] for date in flexible_week_dates
-                    ]
-                    week_rest_sum = cp_model.LinearExpr.Sum(week_rest_vars)
-                    # 最低1日は休み（週休2日を確保）
-                    model.Add(week_rest_sum >= 1)
-                else:
-                    # 柔軟に調整できる日がない場合（すべて必須勤務日または希望休）
-                    # この場合は既に週休2日が確保されているか、確保できない状態
-                    # 制約は追加しない（後でチェックで警告を出す）
-                    pass
+                week_rest_sum = cp_model.LinearExpr.Sum(week_rest_vars)
+                # 水曜が店休日なので、水曜以外でちょうど1日は休み（週休2日を確保）
+                model.Add(week_rest_sum == 1)
     
     # 制約8: 最大連続勤務6日（店休日を除く）- 可能な限り満たす
     # この制約は削除し、後で結果をチェックして警告を出す
@@ -401,6 +392,7 @@ def optimize_shift(
             weekly_overwork_vars.append(overwork_var)
     
     # 制約9: 男女バランスを最適化（各日の男女比を均等に近づける）
+    # 注意: 必須制約ではなく、目的関数でペナルティのみ（できる限り叶える）
     for date in dates:
         if is_store_closed(date):
             continue
@@ -418,15 +410,20 @@ def optimize_shift(
         if male_workers and female_workers:
             male_count = cp_model.LinearExpr.Sum(male_workers) if male_workers else 0
             female_count = cp_model.LinearExpr.Sum(female_workers) if female_workers else 0
-            # 男女の差を最小化するためのペナルティ変数
+            # 男女の差を最小化するためのペナルティ変数（必須制約ではない）
             gender_diff = model.NewIntVar(0, num_employees, f"gender_diff_{date.replace('-', '')}")
             model.Add(gender_diff >= male_count - female_count)
             model.Add(gender_diff >= female_count - male_count)
             gender_balance_vars.append(gender_diff)
 
-    # 週休2日を優先するためのペナルティ変数
+    # 週休2日のペナルティ変数（固定シフトの人以外で、週休2日が確保できていない場合）
+    # 注意: 固定シフトの人は既に制約7で厳密に管理されているため、ここではペナルティのみ
     weekly_rest_penalty_vars = []
     for emp_id in employee_ids:
+        # 固定シフトの人は除外（制約7で既に厳密に管理されている）
+        if emp_id in fixed_employees:
+            continue
+        
         mandatory_off = mandatory_off_dates_per_emp.get(emp_id, set())
         mandatory_work = mandatory_work_dates_per_emp.get(emp_id, set())
         
@@ -447,16 +444,18 @@ def optimize_shift(
                 # その週の店休日以外で休みの日数を計算
                 week_rest_vars = [
                     1 - shifts[(emp_id, date)] for date in week_workable_dates
-                    if date not in mandatory_off and date not in mandatory_work
                 ]
-                if week_rest_vars:
-                    # 週休2日を確保するため、店休日以外で最低1日は休みにする
-                    # ペナルティ変数: 週休2日が確保できていない場合にペナルティ
-                    week_rest_sum = cp_model.LinearExpr.Sum(week_rest_vars)
-                    # 店休日以外で最低1日は休み（週休2日を確保）
-                    rest_penalty = model.NewIntVar(0, 7, f"rest_penalty_{emp_id}_{week_key}")
-                    model.Add(rest_penalty >= 1 - week_rest_sum)
-                    weekly_rest_penalty_vars.append(rest_penalty)
+                week_rest_sum = cp_model.LinearExpr.Sum(week_rest_vars)
+                # 水曜が店休日なので、水曜以外でちょうど1日は休み（週休2日を確保）
+                # 制約7で既に厳密に管理されているが、念のためペナルティも追加
+                # 1 - week_rest_sum が0でない場合にペナルティ
+                rest_penalty = model.NewIntVar(0, 7, f"rest_penalty_{emp_id}_{week_key}")
+                diff_var = model.NewIntVar(-7, 7, f"rest_diff_{emp_id}_{week_key}")
+                model.Add(diff_var == 1 - week_rest_sum)
+                # |diff_var| <= rest_penalty を実現
+                model.Add(rest_penalty >= diff_var)
+                model.Add(rest_penalty >= -diff_var)
+                weekly_rest_penalty_vars.append(rest_penalty)
     
     # 目的関数: 不足人数を最小化しつつ、週休2日を確保し、男女バランスを最適化
     # 注意: 必要以上に休みを増やさないため、rest_exprのペナルティは削除
@@ -467,17 +466,18 @@ def optimize_shift(
         weekly_overwork_sum = cp_model.LinearExpr.Sum(weekly_overwork_vars) if weekly_overwork_vars else 0
         gender_balance_sum = cp_model.LinearExpr.Sum(gender_balance_vars) if gender_balance_vars else 0
         weekly_rest_penalty_sum = cp_model.LinearExpr.Sum(weekly_rest_penalty_vars) if weekly_rest_penalty_vars else 0
-        # 不足人数を最優先、次に週休2日、男女バランス、週次超過勤務の順
-        model.Minimize(shortage_sum * 10000 + weekly_rest_penalty_sum * 500 + weekly_overwork_sum * 100 + gender_balance_sum * 50)
+        # 不足人数を最優先、次に週休2日、週次超過勤務、男女バランスの順
+        # 男女バランスは必須ではないため、重みを下げる（50 → 10）
+        model.Minimize(shortage_sum * 10000 + weekly_rest_penalty_sum * 500 + weekly_overwork_sum * 100 + gender_balance_sum * 10)
     else:
         if weekly_overwork_vars:
             gender_balance_sum = cp_model.LinearExpr.Sum(gender_balance_vars) if gender_balance_vars else 0
             weekly_rest_penalty_sum = cp_model.LinearExpr.Sum(weekly_rest_penalty_vars) if weekly_rest_penalty_vars else 0
-            model.Minimize(cp_model.LinearExpr.Sum(weekly_overwork_vars) * 100 + weekly_rest_penalty_sum * 500 + gender_balance_sum * 50)
+            model.Minimize(cp_model.LinearExpr.Sum(weekly_overwork_vars) * 100 + weekly_rest_penalty_sum * 500 + gender_balance_sum * 10)
         else:
             gender_balance_sum = cp_model.LinearExpr.Sum(gender_balance_vars) if gender_balance_vars else 0
             weekly_rest_penalty_sum = cp_model.LinearExpr.Sum(weekly_rest_penalty_vars) if weekly_rest_penalty_vars else 0
-            model.Minimize(weekly_rest_penalty_sum * 500 + gender_balance_sum * 50)
+            model.Minimize(weekly_rest_penalty_sum * 500 + gender_balance_sum * 10)
     
     # ソルバーを実行
     solver = cp_model.CpSolver()

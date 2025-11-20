@@ -164,7 +164,12 @@ def write_schedule_data(service, spreadsheet_id: str, sheet_name: str, data: lis
             for row in schedule_data:
                 data_row = [row.get("Date", ""), row.get("Day", "")]
                 for emp_id in employee_ids:
-                    data_row.append(row.get(emp_id, ""))
+                    val = row.get(emp_id, "")
+                    # "WORK" を "出勤" に変換（表示用）
+                    if val == "WORK":
+                        data_row.append("出勤")
+                    else:
+                        data_row.append(val)
                 values.append(data_row)
         else:
             values = schedule_data
@@ -249,7 +254,7 @@ def write_schedule_data(service, spreadsheet_id: str, sheet_name: str, data: lis
                             }
                         })
             
-            # 希望が叶わなかった日を緑文字で表示
+            # 希望が叶わなかった日を緑文字で表示（WORKのセルを緑色にする）
             if unmet_requests:
                 # 従業員IDの列インデックスを取得
                 emp_id_to_col = {}
@@ -262,6 +267,8 @@ def write_schedule_data(service, spreadsheet_id: str, sheet_name: str, data: lis
                         if (date, emp_id) in unmet_requests:
                             col_idx = emp_id_to_col.get(emp_id)
                             if col_idx is not None:
+                                # セルの値を"WORK"から"出勤"に変更（表示用）
+                                # ただし、色付けは別途行う
                                 format_requests.append({
                                     "repeatCell": {
                                         "range": {
@@ -276,7 +283,7 @@ def write_schedule_data(service, spreadsheet_id: str, sheet_name: str, data: lis
                                                 "textFormat": {
                                                     "foregroundColor": {
                                                         "red": 0.0,
-                                                        "green": 1.0,
+                                                        "green": 0.8,
                                                         "blue": 0.0
                                                     }
                                                 }
@@ -336,7 +343,7 @@ def write_schedule_data(service, spreadsheet_id: str, sheet_name: str, data: lis
                     val = str(row.get(emp_id, "")).strip().upper()
                     if val == "OFF":
                         by_emp[emp_id]["Off"] += 1
-                    elif val:
+                    elif val in ["WORK", "出勤"]:
                         by_emp[emp_id]["Work"] += 1
                     if (date, emp_id) in unmet_set:
                         by_emp[emp_id]["Unmet"] += 1

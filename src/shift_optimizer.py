@@ -106,14 +106,28 @@ def parse_fixed_pattern(value) -> Dict[str, Set[int]]:
     return {"work": work_days, "off": off_days}
 
 
+def is_store_closed(date_str: str) -> bool:
+    """店舗休日かどうかを判定（水曜日、または12月の29,30,31日）"""
+    if is_wednesday(date_str):
+        return True
+    # 12月の29,30,31日をチェック
+    try:
+        date_obj = datetime.strptime(date_str, "%Y-%m-%d")
+        if date_obj.month == 12 and date_obj.day in [29, 30, 31]:
+            return True
+    except ValueError:
+        pass
+    return False
+
+
 def get_required_staff_count(date_str: str) -> int:
     """日付に応じた必要人数を返す"""
-    if is_wednesday(date_str):
-        return 0  # 水曜は店休
+    if is_store_closed(date_str):
+        return 0  # 店休日
     elif get_weekday(date_str) == 6:  # 日曜日
-        return 4
+        return 3  # 最低3名
     else:  # 平日（月・火・木・金・土）
-        return 6
+        return 3  # 最低3名
 
 
 def optimize_shift(
@@ -166,8 +180,8 @@ def optimize_shift(
         if not date:
             continue
         
-        # 水曜日は店休なので、希望を無視する
-        if is_wednesday(date):
+        # 店休日は希望を無視する
+        if is_store_closed(date):
             continue
         
         # Requestsシートのすべての列をチェック（従業員ID列を探す）
@@ -217,21 +231,42 @@ def optimize_shift(
         shifts[(emp_id, date)]
         for emp_id in employee_ids
         for date in dates
-        if not is_wednesday(date)
+        if not is_store_closed(date)
     ]
     
-    # 制約1: 水曜日は全員休み（店休）
+    # 制約1: 店休日（水曜日、12月29-31日）は全員休み
     for date in dates:
-        if is_wednesday(date):
+        if is_store_closed(date):
             for emp_id in employee_ids:
                 model.Add(shifts[(emp_id, date)] == 0)
                 mandatory_off_dates_per_emp[emp_id].add(date)
     
-    # 制約2: 各日の必要人数を満たす（不足分のみペナルティ、過剰配置は許容）
+    # 制約2: 従業員2005と2010は、どちらかが休みの場合はどちらかは必ず出勤
+    emp_2005 = "2005"
+    emp_2010 = "2010"
+    if emp_2005 in employee_ids and emp_2010 in employee_ids:
+        for date in dates:
+            if not is_store_closed(date):
+                # どちらかが休みなら、どちらかは必ず出勤
+                # shifts[2005] + shifts[2010] >= 1 を満たす必要がある
+                model.Add(shifts[(emp_2005, date)] + shifts[(emp_2010, date)] >= 1)
+    
+    # 制約3: 土曜日は2008以外全員出勤
+    emp_2008 = "2008"
+    if emp_2008 in employee_ids:
+        for date in dates:
+            if get_weekday(date) == 5:  # 土曜日
+                if not is_store_closed(date):
+                    for emp_id in employee_ids:
+                        if emp_id != emp_2008:
+                            model.Add(shifts[(emp_id, date)] == 1)
+                            mandatory_work_dates_per_emp[emp_id].add(date)
+    
+    # 制約4: 各日の必要人数を満たす（不足分のみペナルティ、過剰配置は許容）
     shortage_vars = {}
     for date in dates:
-        if is_wednesday(date):
-            continue  # 水曜は既に処理済み
+        if is_store_closed(date):
+            continue  # 店休日は既に処理済み
         
         required = get_required_staff_count(date)
         if required > 0:
@@ -244,7 +279,7 @@ def optimize_shift(
             model.Add(shortage_var >= required - total_work)
             shortage_vars[date] = shortage_var
     
-    # 制約3: 希望休（OFF）を強制的に休みにする
+    # 制約5: 希望休（OFF）を強制的に休みにする
     for emp_id, date in off_requests:
         # 従業員IDが存在することを確認
         if emp_id not in employee_ids:
@@ -256,7 +291,7 @@ def optimize_shift(
         model.Add(shifts[(emp_id, date)] == 0)
         mandatory_off_dates_per_emp[emp_id].add(date)
     
-    # 制約4: 固定勤務者の勤務パターン（必須、ただし希望休があれば休みにする）
+    # 制約6: 固定勤務者の勤務パターン（必須、ただし希望休があれば休みにする）
     for fixed_emp, pattern in fixed_patterns.items():
         work_days = pattern["work"]
         off_days = pattern["off"]
@@ -265,7 +300,7 @@ def optimize_shift(
             weekday = get_weekday(date)
             has_off_request = (date, fixed_emp) in request_dict
             
-            if weekday == 2:  # 水曜日（店休）
+            if is_store_closed(date):  # 店休日
                 model.Add(shifts[(fixed_emp, date)] == 0)
                 mandatory_off_dates_per_emp[fixed_emp].add(date)
             elif weekday in off_days:
@@ -283,23 +318,63 @@ def optimize_shift(
                     model.Add(shifts[(fixed_emp, date)] == 0)
                     mandatory_off_dates_per_emp[fixed_emp].add(date)
     
-    non_wednesday_dates = [date for date in dates if not is_wednesday(date)]
+    # 男女バランスを最適化に組み込む
+    # 従業員の性別を取得
+    employee_sex = {}
+    for emp_id in employee_ids:
+        emp_data = employees.get(emp_id, {})
+        sex = str(emp_data.get("Sex", "")).strip().upper()
+        employee_sex[emp_id] = sex
+    
+    # 男女バランスのペナルティ変数
+    gender_balance_vars = []
+    
+    non_store_closed_dates = [date for date in dates if not is_store_closed(date)]
     total_required_work = sum(get_required_staff_count(date) for date in dates)
     average_work_target = total_required_work / num_employees if num_employees > 0 else 0
     minimum_work_floor = max(0, int(average_work_target) - 1)  # 1日ぶんのゆとり
     
-    # 制約5: 月8〜9日の休み（最低8日・最大9日を目安に）
+    # 制約7: 週休2日（水曜の店舗休みを含めた、週休2日）
     for emp_id in employee_ids:
         mandatory_off = mandatory_off_dates_per_emp.get(emp_id, set())
         mandatory_work = mandatory_work_dates_per_emp.get(emp_id, set())
         
-        # 水曜日以外で柔軟に調整できる日を抽出
+        # 店休日以外で柔軟に調整できる日を抽出
         flexible_dates = [
             date for date in dates
-            if not is_wednesday(date)
+            if not is_store_closed(date)
             and date not in mandatory_off
             and date not in mandatory_work
         ]
+        
+        # 週ごとに週休2日を確保
+        # 各週（月曜日から日曜日まで）で、最低2日は休みにする
+        weeks = {}
+        for date in dates:
+            date_obj = datetime.strptime(date, "%Y-%m-%d")
+            # ISO週番号を使用（月曜日が週の始まり）
+            week_num = date_obj.isocalendar()[1]
+            year = date_obj.year
+            week_key = f"{year}-W{week_num:02d}"
+            if week_key not in weeks:
+                weeks[week_key] = []
+            weeks[week_key].append(date)
+        
+        for week_key, week_dates in weeks.items():
+            # その週の店休日以外の日付
+            week_workable_dates = [date for date in week_dates if not is_store_closed(date)]
+            if len(week_workable_dates) >= 2:
+                # その週で最低2日は休みにする
+                week_work_vars = [
+                    shifts[(emp_id, date)] for date in week_workable_dates
+                    if date not in mandatory_off and date not in mandatory_work
+                ]
+                if week_work_vars:
+                    # 週休2日を確保（店休日を含む）
+                    # 店休日以外で最低2日は休み
+                    model.Add(
+                        sum(week_work_vars) <= len(week_workable_dates) - 2
+                    )
         
         mandatory_off_count = len(mandatory_off)
         required_additional_off = max(0, 8 - mandatory_off_count)
@@ -319,18 +394,18 @@ def optimize_shift(
         model.Add(rest_total_expr <= max_rest_allowed)
         
         # 最低勤務日数の下限（平均勤務日数 - 1 を目安に）
-        mandatory_off_non_wed = {
-            date for date in mandatory_off if not is_wednesday(date)
+        mandatory_off_non_store_closed = {
+            date for date in mandatory_off if not is_store_closed(date)
         }
-        total_possible_work = len(non_wednesday_dates) - len(mandatory_off_non_wed)
+        total_possible_work = len(non_store_closed_dates) - len(mandatory_off_non_store_closed)
         min_work_days_for_emp = min(total_possible_work, minimum_work_floor)
         if min_work_days_for_emp > 0:
             model.Add(
-                sum(shifts[(emp_id, date)] for date in non_wednesday_dates)
+                sum(shifts[(emp_id, date)] for date in non_store_closed_dates)
                 >= min_work_days_for_emp
             )
     
-    # 制約5: 最大連続勤務6日（水曜日を除く）- 可能な限り満たす
+    # 制約8: 最大連続勤務6日（店休日を除く）- 可能な限り満たす
     # この制約は削除し、後で結果をチェックして警告を出す
     
     weekly_overwork_vars = []
@@ -340,7 +415,7 @@ def optimize_shift(
             work_vars = [
                 shifts[(emp_id, date)]
                 for date in window_dates
-                if not is_wednesday(date)
+                if not is_store_closed(date)
             ]
             if not work_vars:
                 continue
@@ -348,6 +423,30 @@ def optimize_shift(
             overwork_var = model.NewIntVar(0, 7, f"week_over_{emp_id}_{start_idx}")
             model.Add(window_sum <= 5 + overwork_var)
             weekly_overwork_vars.append(overwork_var)
+    
+    # 制約9: 男女バランスを最適化（各日の男女比を均等に近づける）
+    for date in dates:
+        if is_store_closed(date):
+            continue
+        
+        # その日の男性・女性の勤務者数を計算
+        male_workers = []
+        female_workers = []
+        for emp_id in employee_ids:
+            sex = employee_sex.get(emp_id, "")
+            if sex in ["男", "M", "MALE", "男性"]:
+                male_workers.append(shifts[(emp_id, date)])
+            elif sex in ["女", "F", "FEMALE", "女性"]:
+                female_workers.append(shifts[(emp_id, date)])
+        
+        if male_workers and female_workers:
+            male_count = cp_model.LinearExpr.Sum(male_workers) if male_workers else 0
+            female_count = cp_model.LinearExpr.Sum(female_workers) if female_workers else 0
+            # 男女の差を最小化するためのペナルティ変数
+            gender_diff = model.NewIntVar(0, num_employees, f"gender_diff_{date.replace('-', '')}")
+            model.Add(gender_diff >= male_count - female_count)
+            model.Add(gender_diff >= female_count - male_count)
+            gender_balance_vars.append(gender_diff)
 
     # 目的関数: 不足人数・週次超過勤務を最小化しつつ、可能な限り勤務人数を最大化
     total_possible_shifts = len(all_shift_vars)
@@ -357,13 +456,17 @@ def optimize_shift(
     if shortage_vars:
         shortage_sum = cp_model.LinearExpr.Sum(list(shortage_vars.values()))
         weekly_overwork_sum = cp_model.LinearExpr.Sum(weekly_overwork_vars) if weekly_overwork_vars else 0
+        gender_balance_sum = cp_model.LinearExpr.Sum(gender_balance_vars) if gender_balance_vars else 0
         # 余剰配置をより促進するため、休みの重みを強める
-        model.Minimize(shortage_sum * 1000 + weekly_overwork_sum * 100 + rest_expr * 10)
+        # 男女バランスのペナルティも追加（優先度は中程度）
+        model.Minimize(shortage_sum * 1000 + weekly_overwork_sum * 100 + gender_balance_sum * 50 + rest_expr * 10)
     else:
         if weekly_overwork_vars:
-            model.Minimize(cp_model.LinearExpr.Sum(weekly_overwork_vars) * 100 + rest_expr * 10)
+            gender_balance_sum = cp_model.LinearExpr.Sum(gender_balance_vars) if gender_balance_vars else 0
+            model.Minimize(cp_model.LinearExpr.Sum(weekly_overwork_vars) * 100 + gender_balance_sum * 50 + rest_expr * 10)
         else:
-            model.Minimize(rest_expr * 10)
+            gender_balance_sum = cp_model.LinearExpr.Sum(gender_balance_vars) if gender_balance_vars else 0
+            model.Minimize(gender_balance_sum * 50 + rest_expr * 10)
     
     # ソルバーを実行
     solver = cp_model.CpSolver()
@@ -386,7 +489,7 @@ def optimize_shift(
                 work_days = pattern["work"]
                 fixed_work_days = sum(
                     1 for date in dates
-                    if get_weekday(date) in work_days and not is_wednesday(date)
+                    if get_weekday(date) in work_days and not is_store_closed(date)
                 )
                 print(f"  - 固定勤務者（{fixed_emp}）の勤務日数: {fixed_work_days}日（水曜除く）")
         
@@ -399,7 +502,7 @@ def optimize_shift(
                 1 for (date, eid) in request_dict.keys() 
                 if eid == emp_id
             )
-            monthly_available = sum(1 for date in dates if not is_wednesday(date))
+            monthly_available = sum(1 for date in dates if not is_store_closed(date))
             print(f"    - {emp_id}: 希望休み {employee_off_requests}日 / 月間利用可能日数 {monthly_available}日")
         
         # 各日の必要人数と希望休の数を確認
@@ -418,7 +521,7 @@ def optimize_shift(
                     work_days = pattern["work"]
                     off_days = pattern["off"]
                     
-                    if weekday_num == 2:
+                    if is_store_closed(date):
                         continue
                     if weekday_num in off_days:
                         continue
@@ -426,7 +529,7 @@ def optimize_shift(
                         fixed_working += 1
             
             available = num_employees - off_count - fixed_working
-            if is_wednesday(date):
+            if is_store_closed(date):
                 print(f"  - {date} ({weekday_names[weekday]}): 店休（必要人数0名）")
             else:
                 fixed_status = "勤務" if fixed_working else "休み"
@@ -453,23 +556,23 @@ def optimize_shift(
             # 各従業員について、その日の勤務状況を記録（従業員IDの順序を保持）
             work_count = 0
             for emp_id in employee_ids:
-                if is_wednesday(date):
-                    # 水曜日は店休なので全員OFF
+                if is_store_closed(date):
+                    # 店休日は全員OFF
                     day_shifts[emp_id] = "OFF"
                 elif solver.Value(shifts[(emp_id, date)]) == 1:
                     # 勤務している場合
                     # 希望休があったのに勤務している場合は、希望が叶わなかった
                     if (date, emp_id) in request_dict:
-                        day_shifts[emp_id] = "出勤"  # 緑文字で表示するため、特別な値にする
+                        day_shifts[emp_id] = "WORK"  # 緑文字で表示するため、特別な値にする
                         unmet_requests[(date, emp_id)] = True
                     else:
-                        day_shifts[emp_id] = "出勤"
+                        day_shifts[emp_id] = "WORK"
                     work_count += 1
                 else:
                     day_shifts[emp_id] = "OFF"
             
             # 必要人数を満たせているかチェック
-            if not is_wednesday(date):
+            if not is_store_closed(date):
                 required = get_required_staff_count(date)
                 if work_count < required:
                     insufficient_days.append(date)
@@ -515,8 +618,8 @@ def optimize_shift(
             consecutive_start_date = None
             
             for i, date in enumerate(dates):
-                if is_wednesday(date):
-                    current_consecutive = 0  # 水曜日でリセット
+                if is_store_closed(date):
+                    current_consecutive = 0  # 店休日でリセット
                     continue
                 
                 if solver.Value(shifts[(emp_id, date)]) == 1:
@@ -554,9 +657,9 @@ def optimize_shift(
                     is_working = solver.Value(shifts[(fixed_emp, date)]) == 1
                     has_off_request = (date, fixed_emp) in request_dict
                     
-                    if weekday == 2:  # 水曜日（店休）
+                    if is_store_closed(date):  # 店休日
                         if is_working:
-                            fixed_warnings.append(f"{date}（水曜）に勤務しています（必須: 休み）")
+                            fixed_warnings.append(f"{date}（店休日）に勤務しています（必須: 休み）")
                     elif weekday in off_days:
                         if is_working:
                             fixed_warnings.append(f"{date}（{get_weekday_japanese(date)}曜）に勤務しています（必須: 休み）")

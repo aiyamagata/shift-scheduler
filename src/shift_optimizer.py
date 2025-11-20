@@ -329,6 +329,9 @@ def optimize_shift(
     # 男女バランスのペナルティ変数
     gender_balance_vars = []
     
+    # 週休2日を優先するためのペナルティ変数（後で定義）
+    weekly_rest_penalty_vars = []
+    
     non_store_closed_dates = [date for date in dates if not is_store_closed(date)]
     total_required_work = sum(get_required_staff_count(date) for date in dates)
     average_work_target = total_required_work / num_employees if num_employees > 0 else 0
@@ -495,17 +498,16 @@ def optimize_shift(
         # 余剰配置をより促進するため、休みの重みを強める
         # 男女バランスのペナルティも追加（優先度は中程度）
         # 週休2日のペナルティも追加（優先度は高め）
-        # 土曜日の出勤を最大化（負の値を最大化 = 最小化の逆）
-        model.Minimize(shortage_sum * 10000 + weekly_rest_penalty_sum * 500 + weekly_overwork_sum * 100 + gender_balance_sum * 50 - saturday_work_sum * 10 + rest_expr * 10)
+        model.Minimize(shortage_sum * 10000 + weekly_rest_penalty_sum * 500 + weekly_overwork_sum * 100 + gender_balance_sum * 50 + rest_expr * 10)
     else:
         if weekly_overwork_vars:
             gender_balance_sum = cp_model.LinearExpr.Sum(gender_balance_vars) if gender_balance_vars else 0
             weekly_rest_penalty_sum = cp_model.LinearExpr.Sum(weekly_rest_penalty_vars) if weekly_rest_penalty_vars else 0
-            model.Minimize(cp_model.LinearExpr.Sum(weekly_overwork_vars) * 100 + weekly_rest_penalty_sum * 500 + gender_balance_sum * 50 - saturday_work_sum * 10 + rest_expr * 10)
+            model.Minimize(cp_model.LinearExpr.Sum(weekly_overwork_vars) * 100 + weekly_rest_penalty_sum * 500 + gender_balance_sum * 50 + rest_expr * 10)
         else:
             gender_balance_sum = cp_model.LinearExpr.Sum(gender_balance_vars) if gender_balance_vars else 0
             weekly_rest_penalty_sum = cp_model.LinearExpr.Sum(weekly_rest_penalty_vars) if weekly_rest_penalty_vars else 0
-            model.Minimize(weekly_rest_penalty_sum * 500 + gender_balance_sum * 50 - saturday_work_sum * 10 + rest_expr * 10)
+            model.Minimize(weekly_rest_penalty_sum * 500 + gender_balance_sum * 50 + rest_expr * 10)
     
     # ソルバーを実行
     solver = cp_model.CpSolver()

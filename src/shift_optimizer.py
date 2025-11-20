@@ -332,11 +332,6 @@ def optimize_shift(
     # 週休2日を優先するためのペナルティ変数（後で定義）
     weekly_rest_penalty_vars = []
     
-    non_store_closed_dates = [date for date in dates if not is_store_closed(date)]
-    total_required_work = sum(get_required_staff_count(date) for date in dates)
-    average_work_target = total_required_work / num_employees if num_employees > 0 else 0
-    minimum_work_floor = max(0, int(average_work_target) - 1)  # 1日ぶんのゆとり
-    
     # 制約7: 週休2日（水曜の店舗休みを含めた、週休2日）
     # 水曜が店休日なので、水曜以外で最低1日は休みにする（週休2日を確保）
     for emp_id in employee_ids:
@@ -376,42 +371,8 @@ def optimize_shift(
                     # 目的関数で週休2日を優先する
                     pass  # 週休2日の制約を緩和（目的関数で優先する）
         
-        # 店休日以外で柔軟に調整できる日を抽出
-        flexible_dates = [
-            date for date in dates
-            if not is_store_closed(date)
-            and date not in mandatory_off
-            and date not in mandatory_work
-        ]
-        
-        mandatory_off_count = len(mandatory_off)
-        required_additional_off = max(0, 8 - mandatory_off_count)
-        required_additional_off = min(required_additional_off, len(flexible_dates))
-        
-        if flexible_dates and required_additional_off > 0:
-            model.Add(
-                sum(shifts[(emp_id, date)] for date in flexible_dates)
-                <= len(flexible_dates) - required_additional_off
-            )
-        
-        # 合計休日日数（店休日を含む）を計算
-        rest_terms = [1 - shifts[(emp_id, date)] for date in dates]
-        rest_total_expr = cp_model.LinearExpr.Sum(rest_terms)
-        # 月休みの上限を 9 日に設定（店休含む）
-        max_rest_allowed = max(9, len(mandatory_off))
-        model.Add(rest_total_expr <= max_rest_allowed)
-        
-        # 最低勤務日数の下限（平均勤務日数 - 1 を目安に）
-        mandatory_off_non_store_closed = {
-            date for date in mandatory_off if not is_store_closed(date)
-        }
-        total_possible_work = len(non_store_closed_dates) - len(mandatory_off_non_store_closed)
-        min_work_days_for_emp = min(total_possible_work, minimum_work_floor)
-        if min_work_days_for_emp > 0:
-            model.Add(
-                sum(shifts[(emp_id, date)] for date in non_store_closed_dates)
-                >= min_work_days_for_emp
-            )
+        # 旧要件「月8〜9日休み」の制約は削除
+        # 新しい要件では「週休2日」のみが要件
     
     # 制約8: 最大連続勤務6日（店休日を除く）- 可能な限り満たす
     # この制約は削除し、後で結果をチェックして警告を出す
@@ -637,22 +598,40 @@ def optimize_shift(
         if metadata:
             result.append(metadata)
         
-        # 月8日休みと連続勤務の制約をチェック
+        # 週休2日と連続勤務の制約をチェック
         print("\n=== 制約チェック結果 ===")
         
-        # 月8日休みのチェック（月間で最低8日以上休む）
+        # 週休2日のチェック（水曜の店舗休みを含めた、週休2日）
         for emp_id in employee_ids:
-            monthly_work_days = sum(
-                1 for date in dates 
-                if solver.Value(shifts[(emp_id, date)]) == 1
-            )
-            monthly_rest_days = len(dates) - monthly_work_days
+            # 週ごとに週休2日をチェック
+            weeks = {}
+            for date in dates:
+                date_obj = datetime.strptime(date, "%Y-%m-%d")
+                week_num = date_obj.isocalendar()[1]
+                year = date_obj.year
+                week_key = f"{year}-W{week_num:02d}"
+                if week_key not in weeks:
+                    weeks[week_key] = []
+                weeks[week_key].append(date)
             
-            if monthly_rest_days < 8:
-                warnings.append(
-                    f"⚠️ {emp_id}: 月8日休みの条件を満たしていません "
-                    f"（月間休み: {monthly_rest_days}日 / 必要: 8日以上）"
-                )
+            for week_key, week_dates in weeks.items():
+                # その週の店休日（水曜、12月29-31日）をカウント
+                store_closed_in_week = [date for date in week_dates if is_store_closed(date)]
+                # その週の店休日以外の日付
+                week_workable_dates = [date for date in week_dates if not is_store_closed(date)]
+                
+                if len(week_workable_dates) > 0:
+                    # その週の店休日以外で休みの日数を計算
+                    week_rest_days = sum(
+                        1 for date in week_workable_dates
+                        if solver.Value(shifts[(emp_id, date)]) == 0
+                    )
+                    # 水曜が店休日なので、水曜以外で最低1日は休み（週休2日を確保）
+                    if week_rest_days < 1:
+                        warnings.append(
+                            f"⚠️ {emp_id}: {week_key}の週で週休2日を満たしていません "
+                            f"（店休日以外の休み: {week_rest_days}日 / 必要: 1日以上）"
+                        )
         
         # 連続勤務のチェック（7連勤以上を避ける）
         for emp_id in employee_ids:

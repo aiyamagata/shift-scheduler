@@ -415,6 +415,35 @@ def optimize_shift(
             model.Add(gender_diff >= male_count - female_count)
             model.Add(gender_diff >= female_count - male_count)
             gender_balance_vars.append(gender_diff)
+    
+    # 制約10: 月、火、木、金、日曜日の出勤人数のバランスを揃える
+    # 注意: 必須制約ではなく、目的関数でペナルティのみ（できる限り叶える）
+    weekday_staff_balance_vars = []
+    weekday_dates = [date for date in dates if not is_store_closed(date) and get_weekday(date) in [0, 1, 3, 4, 6]]  # 月、火、木、金、日
+    
+    if len(weekday_dates) > 0:
+        # 各日の出勤人数を計算
+        daily_staff_counts = []
+        for date in weekday_dates:
+            daily_count = cp_model.LinearExpr.Sum([
+                shifts[(emp_id, date)] for emp_id in employee_ids
+            ])
+            daily_staff_counts.append(daily_count)
+        
+        # 平均出勤人数を計算（整数値として扱う）
+        total_staff = cp_model.LinearExpr.Sum(daily_staff_counts) if daily_staff_counts else 0
+        avg_staff_var = model.NewIntVar(0, num_employees, "avg_weekday_staff")
+        # 平均を近似（総人数 / 日数）
+        model.Add(avg_staff_var * len(weekday_dates) <= total_staff)
+        model.Add((avg_staff_var + 1) * len(weekday_dates) > total_staff)
+        
+        # 各日の出勤人数と平均の差を計算
+        for i, date in enumerate(weekday_dates):
+            diff_var = model.NewIntVar(0, num_employees, f"weekday_staff_diff_{date.replace('-', '')}")
+            # |daily_count - avg_staff_var| <= diff_var を実現
+            model.Add(diff_var >= daily_staff_counts[i] - avg_staff_var)
+            model.Add(diff_var >= avg_staff_var - daily_staff_counts[i])
+            weekday_staff_balance_vars.append(diff_var)
 
     # 週休2日のペナルティ変数（固定シフトの人以外で、週休2日が確保できていない場合）
     # 注意: 固定シフトの人は既に制約7で厳密に管理されているため、ここではペナルティのみ
@@ -466,18 +495,21 @@ def optimize_shift(
         weekly_overwork_sum = cp_model.LinearExpr.Sum(weekly_overwork_vars) if weekly_overwork_vars else 0
         gender_balance_sum = cp_model.LinearExpr.Sum(gender_balance_vars) if gender_balance_vars else 0
         weekly_rest_penalty_sum = cp_model.LinearExpr.Sum(weekly_rest_penalty_vars) if weekly_rest_penalty_vars else 0
-        # 不足人数を最優先、次に週休2日、週次超過勤務、男女バランスの順
-        # 男女バランスは必須ではないため、重みを下げる（50 → 10）
-        model.Minimize(shortage_sum * 10000 + weekly_rest_penalty_sum * 500 + weekly_overwork_sum * 100 + gender_balance_sum * 10)
+        weekday_staff_balance_sum = cp_model.LinearExpr.Sum(weekday_staff_balance_vars) if weekday_staff_balance_vars else 0
+        # 不足人数を最優先、次に週休2日、週次超過勤務、平日人数バランス、男女バランスの順
+        # 男女バランスと平日人数バランスは必須ではないため、重みを下げる
+        model.Minimize(shortage_sum * 10000 + weekly_rest_penalty_sum * 500 + weekly_overwork_sum * 100 + weekday_staff_balance_sum * 30 + gender_balance_sum * 10)
     else:
         if weekly_overwork_vars:
             gender_balance_sum = cp_model.LinearExpr.Sum(gender_balance_vars) if gender_balance_vars else 0
             weekly_rest_penalty_sum = cp_model.LinearExpr.Sum(weekly_rest_penalty_vars) if weekly_rest_penalty_vars else 0
-            model.Minimize(cp_model.LinearExpr.Sum(weekly_overwork_vars) * 100 + weekly_rest_penalty_sum * 500 + gender_balance_sum * 10)
+            weekday_staff_balance_sum = cp_model.LinearExpr.Sum(weekday_staff_balance_vars) if weekday_staff_balance_vars else 0
+            model.Minimize(cp_model.LinearExpr.Sum(weekly_overwork_vars) * 100 + weekly_rest_penalty_sum * 500 + weekday_staff_balance_sum * 30 + gender_balance_sum * 10)
         else:
             gender_balance_sum = cp_model.LinearExpr.Sum(gender_balance_vars) if gender_balance_vars else 0
             weekly_rest_penalty_sum = cp_model.LinearExpr.Sum(weekly_rest_penalty_vars) if weekly_rest_penalty_vars else 0
-            model.Minimize(weekly_rest_penalty_sum * 500 + gender_balance_sum * 10)
+            weekday_staff_balance_sum = cp_model.LinearExpr.Sum(weekday_staff_balance_vars) if weekday_staff_balance_vars else 0
+            model.Minimize(weekly_rest_penalty_sum * 500 + weekday_staff_balance_sum * 30 + gender_balance_sum * 10)
     
     # ソルバーを実行
     solver = cp_model.CpSolver()

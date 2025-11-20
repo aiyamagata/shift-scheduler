@@ -376,6 +376,14 @@ def optimize_shift(
                     # 目的関数で週休2日を優先する
                     pass  # 週休2日の制約を緩和（目的関数で優先する）
         
+        # 店休日以外で柔軟に調整できる日を抽出
+        flexible_dates = [
+            date for date in dates
+            if not is_store_closed(date)
+            and date not in mandatory_off
+            and date not in mandatory_work
+        ]
+        
         mandatory_off_count = len(mandatory_off)
         required_additional_off = max(0, 8 - mandatory_off_count)
         required_additional_off = min(required_additional_off, len(flexible_dates))

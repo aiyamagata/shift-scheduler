@@ -495,9 +495,6 @@ def optimize_shift(
     total_shifts_expr = cp_model.LinearExpr.Sum(all_shift_vars) if all_shift_vars else 0
     rest_expr = total_possible_shifts - total_shifts_expr if all_shift_vars else 0
     
-    # 土曜日の2008以外の出勤を優先
-    saturday_work_sum = cp_model.LinearExpr.Sum(saturday_work_vars) if saturday_work_vars else 0
-    
     if shortage_vars:
         shortage_sum = cp_model.LinearExpr.Sum(list(shortage_vars.values()))
         weekly_overwork_sum = cp_model.LinearExpr.Sum(weekly_overwork_vars) if weekly_overwork_vars else 0

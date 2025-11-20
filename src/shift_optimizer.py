@@ -496,20 +496,21 @@ def optimize_shift(
         gender_balance_sum = cp_model.LinearExpr.Sum(gender_balance_vars) if gender_balance_vars else 0
         weekly_rest_penalty_sum = cp_model.LinearExpr.Sum(weekly_rest_penalty_vars) if weekly_rest_penalty_vars else 0
         weekday_staff_balance_sum = cp_model.LinearExpr.Sum(weekday_staff_balance_vars) if weekday_staff_balance_vars else 0
-        # 不足人数を最優先、次に週休2日、週次超過勤務、平日人数バランス、男女バランスの順
-        # 男女バランスと平日人数バランスは必須ではないため、重みを下げる
-        model.Minimize(shortage_sum * 10000 + weekly_rest_penalty_sum * 500 + weekly_overwork_sum * 100 + weekday_staff_balance_sum * 30 + gender_balance_sum * 10)
+        # 不足人数を最優先、次に週休2日、平日人数バランス、週次超過勤務、男女バランスの順
+        # 平日人数バランスの重みを上げて、日ごとの出勤人数の偏りを減らす
+        # 男女バランスは必須ではないため、重みを下げる
+        model.Minimize(shortage_sum * 10000 + weekly_rest_penalty_sum * 500 + weekday_staff_balance_sum * 200 + weekly_overwork_sum * 100 + gender_balance_sum * 10)
     else:
         if weekly_overwork_vars:
             gender_balance_sum = cp_model.LinearExpr.Sum(gender_balance_vars) if gender_balance_vars else 0
             weekly_rest_penalty_sum = cp_model.LinearExpr.Sum(weekly_rest_penalty_vars) if weekly_rest_penalty_vars else 0
             weekday_staff_balance_sum = cp_model.LinearExpr.Sum(weekday_staff_balance_vars) if weekday_staff_balance_vars else 0
-            model.Minimize(cp_model.LinearExpr.Sum(weekly_overwork_vars) * 100 + weekly_rest_penalty_sum * 500 + weekday_staff_balance_sum * 30 + gender_balance_sum * 10)
+            model.Minimize(cp_model.LinearExpr.Sum(weekly_overwork_vars) * 100 + weekly_rest_penalty_sum * 500 + weekday_staff_balance_sum * 200 + gender_balance_sum * 10)
         else:
             gender_balance_sum = cp_model.LinearExpr.Sum(gender_balance_vars) if gender_balance_vars else 0
             weekly_rest_penalty_sum = cp_model.LinearExpr.Sum(weekly_rest_penalty_vars) if weekly_rest_penalty_vars else 0
             weekday_staff_balance_sum = cp_model.LinearExpr.Sum(weekday_staff_balance_vars) if weekday_staff_balance_vars else 0
-            model.Minimize(weekly_rest_penalty_sum * 500 + weekday_staff_balance_sum * 30 + gender_balance_sum * 10)
+            model.Minimize(weekly_rest_penalty_sum * 500 + weekday_staff_balance_sum * 200 + gender_balance_sum * 10)
     
     # ソルバーを実行
     solver = cp_model.CpSolver()

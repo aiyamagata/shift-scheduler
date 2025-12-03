@@ -105,12 +105,75 @@ GitHubのリポジトリページをリロードして、ファイルがアッ�
 
 ### 5-1. Heroku CLIのインストール（未インストールの場合）
 
-```bash
-# macOSの場合
-brew tap heroku/brew && brew install heroku
+Heroku CLIがインストールされていない場合、以下のいずれかの方法でインストールしてください。
 
-# または公式サイトからインストール
-# https://devcenter.heroku.com/articles/heroku-cli
+#### 方法1: 公式サイトから手動インストール（最も簡単・推奨）
+
+パスワード入力の問題を避けるため、公式サイトから直接ダウンロードする方法が最も簡単です。
+
+1. ブラウザで以下のURLを開く：
+   - https://devcenter.heroku.com/articles/heroku-cli
+   - または直接: https://cli-assets.heroku.com/heroku-darwin-x64.tar.gz
+
+2. macOS用のインストーラーをダウンロード（通常は自動的にダウンロードフォルダに保存されます）
+
+3. ダウンロードしたファイルを開いてインストールを実行
+
+4. インストール確認：
+```bash
+heroku --version
+```
+
+**注意**: インストール後、ターミナルを再起動するか、以下を実行してください：
+```bash
+source ~/.zshrc
+```
+
+#### 方法1-2: スクリプトをダウンロードしてから実行（パスワード入力が必要）
+
+1. スクリプトをダウンロード：
+```bash
+curl -o /tmp/heroku-install.sh https://cli-assets.heroku.com/install.sh
+```
+
+2. 実行権限を付与：
+```bash
+chmod +x /tmp/heroku-install.sh
+```
+
+3. スクリプトを実行（この時点でパスワード入力が求められます）：
+```bash
+/tmp/heroku-install.sh
+```
+
+4. インストール確認：
+```bash
+heroku --version
+```
+
+#### 方法2: Homebrewを使用（Homebrewがインストールされている場合）
+
+```bash
+# Homebrewがインストールされている場合
+brew tap heroku/brew && brew install heroku
+```
+
+**Homebrewのインストール方法（未インストールの場合）:**
+```bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+```
+
+#### 方法3: npmを使用（Node.jsがインストールされている場合）
+
+Node.jsとnpmがインストールされている場合は、以下のコマンドでインストールできます：
+
+```bash
+npm install -g heroku
+```
+
+インストール確認：
+```bash
+heroku --version
 ```
 
 ### 5-2. Herokuにログイン
@@ -122,6 +185,27 @@ heroku login
 ブラウザが開くので、Herokuアカウントでログインしてください。
 
 ### 5-3. Herokuアプリを作成
+
+#### 5-3-1. アカウントの確認（支払い情報の登録が必要な場合）
+
+**重要**: Herokuは2022年11月以降、無料プランを廃止しました。アプリを作成するには、支払い情報（クレジットカード）の登録が必要です。
+
+**注意点:**
+- 支払い情報を登録しても、**Eco Dynoプラン（$5/月）** を使用する限り、実際に課金されることはありません
+- ただし、使用量がプランの上限を超えた場合のみ課金されます
+- アカウント確認のためだけに必要で、登録後すぐに課金されるわけではありません
+
+**手順:**
+1. エラーメッセージに表示されているURLにアクセス：
+   ```
+   https://heroku.com/verify
+   ```
+2. Herokuダッシュボードにログイン
+3. 「Account settings」→「Billing」に移動
+4. クレジットカード情報を入力（確認のみで、すぐに課金されません）
+5. 確認が完了したら、再度アプリ作成コマンドを実行
+
+#### 5-3-2. アプリを作成
 
 ```bash
 cd "/Users/yamagataai/Desktop/シフト提案ツール"
@@ -321,13 +405,41 @@ git push heroku main
 
 ## 🔧 トラブルシューティング
 
-### 問題1: `git push` で認証エラーが出る
+### 問題1: Herokuアプリ作成時に「支払い情報の確認が必要」というエラーが出る
+
+**エラーメッセージ例:**
+```
+To create an app, verify your account by adding payment information.
+```
+
+**原因:**
+Herokuは2022年11月以降、無料プランを廃止しました。アプリを作成するには、支払い情報（クレジットカード）の登録が必要です。
+
+**解決策:**
+1. エラーメッセージに表示されているURLにアクセス：
+   ```
+   https://heroku.com/verify
+   ```
+2. Herokuダッシュボードにログイン
+3. 「Account settings」→「Billing」に移動
+4. クレジットカード情報を入力
+5. 確認が完了したら、再度アプリ作成コマンドを実行：
+   ```bash
+   heroku create shift-scheduler-あなたの名前
+   ```
+
+**注意点:**
+- 支払い情報を登録しても、**Eco Dynoプラン（$5/月）** を使用する限り、実際に課金されることはありません
+- 使用量がプランの上限を超えた場合のみ課金されます
+- アカウント確認のためだけに必要です
+
+### 問題2: `git push` で認証エラーが出る
 
 **解決策：**
 - Personal Access Tokenを使用する（GitHub Settings > Developer settings > Personal access tokens）
 - または、SSHキーを設定する
 
-### 問題2: Herokuデプロイが失敗する
+### 問題3: Herokuデプロイが失敗する
 
 **確認事項：**
 - `Procfile`が正しく存在するか
@@ -339,13 +451,13 @@ git push heroku main
 heroku logs --tail
 ```
 
-### 問題3: アプリが起動しない
+### 問題4: アプリが起動しない
 
 **確認事項：**
 - 環境変数が正しく設定されているか（`heroku config`）
 - `/health`エンドポイントにアクセスしてエラーメッセージを確認
 
-### 問題4: Google認証が失敗する
+### 問題5: Google認証が失敗する
 
 **確認事項：**
 - 環境変数`GOOGLE_TOKEN_JSON`が正しく設定されているか（`heroku config:get GOOGLE_TOKEN_JSON`で確認）
@@ -388,7 +500,10 @@ heroku logs --tail
 3. **スプレッドシートID**
    - スプレッドシートIDは環境変数として設定するか、APIリクエスト時に指定する必要があります
 
-4. **Herokuの無料プラン**
+4. **Herokuのプランについて**
+   - Herokuは2022年11月以降、無料プランを廃止しました
+   - アプリを作成するには、支払い情報（クレジットカード）の登録が必要です
+   - **Eco Dynoプラン（$5/月）** を使用する限り、実際に課金されることはありません
    - 無料プランでは、一定時間アクセスがないとアプリがスリープします
    - Schedulerは有料プランが必要な場合があります（確認してください）
 
